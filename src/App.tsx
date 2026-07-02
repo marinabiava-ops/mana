@@ -1629,12 +1629,6 @@ export default function App() {
     setPickPhrase(false);
     setEditAlbum(false);
   };
-  const goToWork = (w: any) => {
-    setDetail(w);
-    setTab('works');
-    setAddWork(false);
-    setEditWork(null);
-  };
   const payStr = (w: any) => {
     if (!w.valor) return '';
     const n = w.installments || 1;
