@@ -192,6 +192,14 @@ const DEF_TMPLS = [
   { id: 't6', name: 'Corporativo', icon: '💼', steps: [...DEF_STEPS] },
 ];
 
+const POST_STATUS = [
+  { v: 'nao_autorizado', l: 'Não autorizado', icon: '🚫', color: '#c0392b' },
+  { v: 'autorizado', l: 'Autorizado', icon: '⏳', color: '#c48a2a' },
+  { v: 'postado', l: 'Postado', icon: '📸', color: '#5a9e6f' },
+];
+const postInfo = (status: string) =>
+  POST_STATUS.find((p) => p.v === status) || POST_STATUS[0];
+
 const DEF_H = [
   { id: 'h1', name: 'Oração', icon: '🙏' },
   { id: 'h2', name: 'Meditação', icon: '🧘‍♀️' },
@@ -275,11 +283,21 @@ const fmtR = (v: number) =>
   });
 const fmtDate = (s: string) => (s ? s.split('-').reverse().join('/') : '');
 
+const todayISO = () => new Date().toISOString().slice(0, 10);
 const workMY = (w: any): { m: number; y: number } | null => {
-  if (!w.date) return null;
-  const d = new Date(w.date + 'T12:00:00');
+  const raw = w.date || w.createdAt;
+  if (!raw) return null;
+  const d = new Date(raw + 'T12:00:00');
   if (isNaN(d.getTime())) return null;
   return { m: d.getMonth() + 1, y: d.getFullYear() };
+};
+const belongsToMonthList = (w: any, vm: { m: number; y: number }) => {
+  // sem data de evento -> sempre aparece na lista de Trabalhos,
+  // independente do mês selecionado (ex: fotolivros avulsos)
+  if (!w.date) return true;
+  const d = new Date(w.date + 'T12:00:00');
+  if (isNaN(d.getTime())) return true;
+  return d.getMonth() + 1 === vm.m && d.getFullYear() === vm.y;
 };
 const sortByDate = (arr: any[]) =>
   [...arr].sort((a, b) => {
@@ -347,13 +365,13 @@ function WorkForm({
     dd[i] = v;
     setDueDates(dd);
   };
-  const buildSteps = () => {
+  const mainSteps = (() => {
     const tmpl = templates.find((t: any) => t.id === tmplId);
-    let s = tmpl ? [...tmpl.steps] : [];
-    if (album) s = [...s, ...(albumSteps || DEF_ALBUM_STEPS)];
-    return s;
-  };
-  const prev = buildSteps();
+    return tmpl ? [...tmpl.steps] : [];
+  })();
+  const albumStepsArr = albumSteps || DEF_ALBUM_STEPS;
+  // prev é só para exibir o preview ao usuário (etapas combinadas)
+  const prev = album ? [...mainSteps, ...albumStepsArr] : mainSteps;
   const instVal =
     valor && instNum > 1 ? (parseFloat(valor) / instNum).toFixed(2) : '';
   const liquido =
@@ -425,8 +443,34 @@ function WorkForm({
           }),
         }}
       >
-        {album ? '📚 Álbum incluído ✓' : '📚 Adicionar álbum'}
+        {album ? '📚 Fotolivro incluído ✓' : '📚 Adicionar fotolivro'}
       </button>
+      {album && tmplId && (
+        <div
+          style={{
+            fontSize: 11,
+            color: C.lav,
+            marginBottom: 8,
+            fontWeight: 600,
+          }}
+        >
+          ℹ️ Serão criados 2 trabalhos: o principal e um separado (Fotolivro)
+          só com as etapas do álbum.
+        </div>
+      )}
+      {album && !tmplId && (
+        <div
+          style={{
+            fontSize: 11,
+            color: C.lav,
+            marginBottom: 8,
+            fontWeight: 600,
+          }}
+        >
+          ℹ️ Será criado apenas 1 trabalho: um Fotolivro, com as etapas do
+          álbum.
+        </div>
+      )}
 
       {prev.length > 0 && (
         <div
@@ -465,13 +509,17 @@ function WorkForm({
         </div>
       )}
 
-      <label style={{ ...lb, marginTop: 6 }}>Data do evento</label>
-      <input
-        type="date"
-        style={ip()}
-        value={date}
-        onChange={(e: any) => setDate(e.target.value)}
-      />
+      {!(album && !tmplId) && (
+        <>
+          <label style={{ ...lb, marginTop: 6 }}>Data do evento</label>
+          <input
+            type="date"
+            style={ip()}
+            value={date}
+            onChange={(e: any) => setDate(e.target.value)}
+          />
+        </>
+      )}
 
       <label style={{ ...lb, marginTop: 10 }}>Valor total (R$)</label>
       <input
@@ -636,7 +684,8 @@ function WorkForm({
                 dueDates,
                 obs,
               },
-              prev
+              mainSteps,
+              album ? albumStepsArr : null
             );
           }}
           style={bt(C.pri, { flex: 2 })}
@@ -1147,6 +1196,8 @@ export default function App() {
   const [pickPhrase, setPickPhrase] = useState(false);
   const [wSearch, setWSearch] = useState('');
   const [wFilter, setWFilter] = useState('todos');
+  const [wKindFilter, setWKindFilter] = useState('todos');
+  const [wTypeFilter, setWTypeFilter] = useState('todos');
   const [wSort, setWSort] = useState('data');
 
   const now = new Date();
@@ -1307,7 +1358,8 @@ export default function App() {
 
   const saveWork = (
     f: any,
-    previewSteps: string[],
+    mainSteps: string[],
+    albumStepsList: string[] | null,
     existingId: string | null
   ) => {
     const nd = cp();
@@ -1315,11 +1367,23 @@ export default function App() {
     const newV = parseFloat(f.valor) || 0;
     const newExp = parseFloat(f.expenses) || 0;
     const instNum = parseInt(f.installments) || 1;
+
     if (existingId) {
+      // Edição: mantém tudo no mesmo trabalho (sem dividir de novo)
+      const combinedSteps = albumStepsList
+        ? [...mainSteps, ...albumStepsList]
+        : mainSteps;
+      // Se não tem tipo escolhido e o álbum está marcado, é um Fotolivro.
+      // Isso também corrige (dali pra frente) trabalhos antigos que não
+      // tinham o campo "kind" salvo.
+      const isFotolivroForm = !f.tmplId && f.album;
+      const editTmplName = isFotolivroForm ? 'Fotolivro' : tmpl?.name || '';
+      const editTmplIcon = isFotolivroForm ? '📚' : tmpl?.icon || '📷';
+      const editKind = isFotolivroForm ? 'fotolivro' : 'trabalho';
       const idx = nd.works.findIndex((w: any) => w.id === existingId);
       if (idx >= 0) {
         const ex = nd.works[idx];
-        const newSteps = previewSteps.map((sN, i) => {
+        const newSteps = combinedSteps.map((sN, i) => {
           const match = ex.steps.find((es: any) => es.name === sN);
           return match
             ? { ...match }
@@ -1330,9 +1394,10 @@ export default function App() {
           clientName: f.clientName.trim(),
           workName: f.workName.trim(),
           tmplId: f.tmplId,
-          tmplName: tmpl?.name || '',
-          tmplIcon: tmpl?.icon || '📷',
+          tmplName: editTmplName,
+          tmplIcon: editTmplIcon,
           album: f.album,
+          kind: editKind,
           date: f.date,
           valor: newV,
           expenses: newExp,
@@ -1342,37 +1407,123 @@ export default function App() {
           installmentsPaid: Array(instNum).fill(false),
           steps: newSteps,
           obs: f.obs || '',
+          createdAt: ex.createdAt || todayISO(),
         };
         setDetail(nd.works[idx]);
       }
-    } else {
+      sv(nd);
+      setAddWork(false);
+      setEditWork(null);
+      flash('✅ Atualizado!');
+      return;
+    }
+
+    // FOTOLIVRO SOZINHO: álbum marcado, mas sem tipo de trabalho escolhido
+    // -> cria só 1 trabalho (Fotolivro), sem data
+    if (!f.tmplId && albumStepsList && albumStepsList.length) {
       nd.works.push({
         id: 'w' + Date.now(),
         clientName: f.clientName.trim(),
         workName: f.workName.trim(),
-        tmplId: f.tmplId,
-        tmplName: tmpl?.name || '',
-        tmplIcon: tmpl?.icon || '📷',
-        album: f.album,
-        date: f.date,
+        tmplId: '',
+        tmplName: 'Fotolivro',
+        tmplIcon: '📚',
+        album: true,
+        kind: 'fotolivro',
+        date: '',
         valor: newV,
         expenses: newExp,
         method: f.method,
         installments: instNum,
         dueDates: f.dueDates,
         installmentsPaid: Array(instNum).fill(false),
-        steps: previewSteps.map((s, i) => ({
-          id: `s${i}`,
+        steps: albumStepsList.map((s, i) => ({
+          id: `a${i}`,
           name: s,
           done: false,
         })),
         obs: f.obs || '',
+        postStatus: 'nao_autorizado',
+        createdAt: todayISO(),
+      });
+      sv(nd);
+      setAddWork(false);
+      setEditWork(null);
+      flash('✅ Fotolivro adicionado!');
+      return;
+    }
+
+    // Trabalho normal (com tipo escolhido). Se tiver álbum junto, cria
+    // um 2º trabalho separado (Fotolivro).
+    nd.works.push({
+      id: 'w' + Date.now(),
+      clientName: f.clientName.trim(),
+      workName: f.workName.trim(),
+      tmplId: f.tmplId,
+      tmplName: tmpl?.name || '',
+      tmplIcon: tmpl?.icon || '📷',
+      album: false,
+      kind: 'trabalho',
+      date: f.date,
+      valor: newV,
+      expenses: newExp,
+      method: f.method,
+      installments: instNum,
+      dueDates: f.dueDates,
+      installmentsPaid: Array(instNum).fill(false),
+      steps: mainSteps.map((s, i) => ({ id: `s${i}`, name: s, done: false })),
+      obs: f.obs || '',
+      postStatus: 'nao_autorizado',
+      createdAt: todayISO(),
+    });
+
+    if (f.tmplId && albumStepsList && albumStepsList.length) {
+      nd.works.push({
+        id: 'w' + Date.now() + 'a',
+        clientName: f.clientName.trim(),
+        workName: (f.workName.trim() ? f.workName.trim() + ' — ' : '') +
+          'Fotolivro',
+        tmplId: f.tmplId,
+        tmplName: 'Fotolivro',
+        tmplIcon: '📚',
+        album: true,
+        kind: 'fotolivro',
+        date: f.date,
+        valor: 0,
+        expenses: 0,
+        method: f.method,
+        installments: 1,
+        dueDates: [''],
+        installmentsPaid: [false],
+        steps: albumStepsList.map((s, i) => ({
+          id: `a${i}`,
+          name: s,
+          done: false,
+        })),
+        obs: '',
+        postStatus: 'nao_autorizado',
+        createdAt: todayISO(),
       });
     }
+
     sv(nd);
     setAddWork(false);
     setEditWork(null);
-    flash(existingId ? '✅ Atualizado!' : '✅ Trabalho adicionado!');
+    flash(
+      f.tmplId && albumStepsList && albumStepsList.length
+        ? '✅ 2 trabalhos criados (principal + fotolivro)!'
+        : '✅ Trabalho adicionado!'
+    );
+  };
+
+  const setPostStatus = (wId: string, status: string) => {
+    const nd = cp();
+    const w = nd.works.find((x: any) => x.id === wId);
+    if (!w) return;
+    w.postStatus = status;
+    sv(nd);
+    setDetail(nd.works.find((x: any) => x.id === wId));
+    flash('📸 Status do post atualizado!');
   };
 
   const delWork = (id: string) => {
@@ -1526,6 +1677,7 @@ export default function App() {
     const my = workMY(w);
     return my && my.m === vm.m && my.y === vm.y;
   });
+  const listWorks = allWorks.filter((w: any) => belongsToMonthList(w, vm));
   const fatBruto = monthWorks.reduce(
     (s: number, w: any) => s + (w.valor || 0),
     0
@@ -1543,24 +1695,31 @@ export default function App() {
   const hPct = d.habits.length
     ? Math.round((d.doneToday.length / d.habits.length) * 100)
     : 0;
-  const actW = sortByDate(
-    allWorks.filter((w: any) => !w.steps.every((s: any) => s.done))
-  );
-
   const applyFilters = (list: any[]) => {
     let r = [...list];
-    if (wSearch.trim())
-      r = r.filter((w: any) =>
-        (w.clientName + ' ' + w.workName)
+    if (wSearch.trim()) {
+      const q = wSearch.toLowerCase().trim();
+      r = r.filter((w: any) => {
+        const kind = w.kind || 'trabalho';
+        const kindWords =
+          kind === 'fotolivro' ? 'fotolivro álbum' : 'trabalho normal';
+        return (w.clientName + ' ' + w.workName + ' ' + w.tmplName + ' ' + kindWords)
           .toLowerCase()
-          .includes(wSearch.toLowerCase())
-      );
+          .includes(q);
+      });
+    }
     if (wFilter === 'andamento')
       r = r.filter((w: any) => !w.steps.every((s: any) => s.done));
     if (wFilter === 'concluidos')
       r = r.filter(
         (w: any) => w.steps.length > 0 && w.steps.every((s: any) => s.done)
       );
+    if (wKindFilter === 'trabalho')
+      r = r.filter((w: any) => (w.kind || 'trabalho') === 'trabalho');
+    if (wKindFilter === 'fotolivro')
+      r = r.filter((w: any) => w.kind === 'fotolivro');
+    if (wTypeFilter !== 'todos')
+      r = r.filter((w: any) => w.tmplId === wTypeFilter);
     if (wSort === 'data') r = sortByDate(r);
     else if (wSort === 'nome')
       r = [...r].sort((a: any, b: any) =>
@@ -1578,7 +1737,7 @@ export default function App() {
       });
     return r;
   };
-  const filteredWorks = applyFilters(allWorks);
+  const filteredWorks = applyFilters(listWorks);
 
   return (
     <div
@@ -1786,85 +1945,61 @@ export default function App() {
                   ? '✨ Todos feitos!'
                   : `Faltam ${d.habits.length - d.doneToday.length} hábito(s)`}
               </div>
-            </div>
-
-            {actW.length > 0 && (
-              <>
-                <SL t="TRABALHOS EM ANDAMENTO" />
-                {actW.slice(0, 5).map((w: any) => {
-                  const done = w.steps.filter((s: any) => s.done);
-                  const p = w.steps.length
-                    ? Math.round((done.length / w.steps.length) * 100)
-                    : 0;
-                  const last = done[done.length - 1];
-                  const next = w.steps.find((s: any) => !s.done);
-                  return (
-                    <div
-                      key={w.id}
-                      style={{ ...sc(), cursor: 'pointer' }}
-                      onClick={() => goToWork(w)}
-                    >
+              {d.habits.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  {d.habits.map((h: any) => {
+                    const done = d.doneToday.includes(h.id);
+                    return (
                       <div
+                        key={h.id}
                         style={{
                           display: 'flex',
-                          justifyContent: 'space-between',
                           alignItems: 'center',
-                          marginBottom: 4,
+                          gap: 10,
+                          padding: '6px 0',
+                          borderTop: `1px solid ${C.bor}`,
                         }}
                       >
-                        <div>
-                          <div style={{ fontWeight: 700, fontSize: 14 }}>
-                            {w.tmplIcon} {w.clientName}
-                            {w.workName ? ` — ${w.workName}` : ''}
-                          </div>
-                          {w.date && (
-                            <div style={{ fontSize: 11, color: C.mut }}>
-                              📅 {fmtDate(w.date)}
-                            </div>
-                          )}
-                          {last && (
-                            <div style={{ fontSize: 11, color: C.ok }}>
-                              ✓ {last.name}
-                            </div>
-                          )}
-                          {next && (
-                            <div style={{ fontSize: 11, color: C.pri }}>
-                              → {next.name}
-                            </div>
-                          )}
-                        </div>
-                        <span
+                        <div
+                          onClick={() => (done ? uncheckH(h.id) : checkH(h))}
                           style={{
-                            fontWeight: 800,
-                            color: C.pri,
-                            fontSize: 15,
+                            width: 28,
+                            height: 28,
+                            borderRadius: '50%',
+                            border: `2px solid ${done ? C.ok : C.bor}`,
+                            background: done ? C.ok : 'transparent',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            flexShrink: 0,
+                            transition: 'all .2s',
                           }}
                         >
-                          {p}%
-                        </span>
+                          {done && (
+                            <span style={{ color: 'white', fontSize: 13 }}>
+                              ✓
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: 17 }}>{h.icon}</span>
+                        <div
+                          style={{
+                            flex: 1,
+                            fontSize: 13,
+                            fontWeight: 600,
+                            opacity: done ? 0.6 : 1,
+                            textDecoration: done ? 'line-through' : 'none',
+                          }}
+                        >
+                          {h.name}
+                        </div>
                       </div>
-                      <Bar
-                        pct={p}
-                        color={`linear-gradient(90deg,${C.lav},#d4b8f0)`}
-                        h={6}
-                      />
-                    </div>
-                  );
-                })}
-                {actW.length > 5 && (
-                  <div
-                    style={{
-                      textAlign: 'center',
-                      color: C.mut,
-                      fontSize: 12,
-                      marginBottom: 8,
-                    }}
-                  >
-                    +{actW.length - 5} outros
-                  </div>
-                )}
-              </>
-            )}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -1882,7 +2017,7 @@ export default function App() {
               style={ip({ marginBottom: 8 })}
               value={wSearch}
               onChange={(e: any) => setWSearch(e.target.value)}
-              placeholder="🔍 Buscar por cliente ou nome..."
+              placeholder="🔍 Buscar por cliente, nome, 'fotolivro' ou 'trabalho'..."
             />
             <div
               style={{
@@ -1912,6 +2047,85 @@ export default function App() {
                   }}
                 >
                   {f.l}
+                </button>
+              ))}
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                gap: 6,
+                marginBottom: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              {[
+                { v: 'todos', l: 'Todos' },
+                { v: 'trabalho', l: '📷 Trabalhos' },
+                { v: 'fotolivro', l: '📚 Fotolivros' },
+              ].map((f) => (
+                <button
+                  key={f.v}
+                  onClick={() => setWKindFilter(f.v)}
+                  style={{
+                    background: wKindFilter === f.v ? C.lav : C.bg,
+                    border: `1.5px solid ${
+                      wKindFilter === f.v ? C.lav : C.bor
+                    }`,
+                    borderRadius: 8,
+                    padding: '5px 12px',
+                    cursor: 'pointer',
+                    color: wKindFilter === f.v ? 'white' : C.txt,
+                    fontWeight: 600,
+                    fontSize: 12,
+                  }}
+                >
+                  {f.l}
+                </button>
+              ))}
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                gap: 6,
+                marginBottom: 12,
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                onClick={() => setWTypeFilter('todos')}
+                style={{
+                  background: wTypeFilter === 'todos' ? C.lav : C.bg,
+                  border: `1.5px solid ${
+                    wTypeFilter === 'todos' ? C.lav : C.bor
+                  }`,
+                  borderRadius: 8,
+                  padding: '5px 12px',
+                  cursor: 'pointer',
+                  color: wTypeFilter === 'todos' ? 'white' : C.txt,
+                  fontWeight: 600,
+                  fontSize: 12,
+                }}
+              >
+                Todos os tipos
+              </button>
+              {d.templates.map((t: any) => (
+                <button
+                  key={t.id}
+                  onClick={() => setWTypeFilter(t.id)}
+                  style={{
+                    background: wTypeFilter === t.id ? C.lav : C.bg,
+                    border: `1.5px solid ${
+                      wTypeFilter === t.id ? C.lav : C.bor
+                    }`,
+                    borderRadius: 8,
+                    padding: '5px 12px',
+                    cursor: 'pointer',
+                    color: wTypeFilter === t.id ? 'white' : C.txt,
+                    fontWeight: 600,
+                    fontSize: 12,
+                  }}
+                >
+                  {t.icon} {t.name}
                 </button>
               ))}
             </div>
@@ -2041,11 +2255,47 @@ export default function App() {
                       color={`linear-gradient(90deg,${C.lav},#d4b8f0)`}
                     />
                   )}
-                  {w.valor > 0 && (
-                    <div style={{ fontSize: 11, color: C.gold, marginTop: 5 }}>
-                      💰 {payStr(w)}
-                    </div>
-                  )}
+                  {w.valor > 0 &&
+                    (() => {
+                      const instN = w.installments || 1;
+                      const paidArr =
+                        w.installmentsPaid || Array(instN).fill(false);
+                      const paidCount = paidArr.filter(Boolean).length;
+                      const fullyPaid = paidCount >= instN;
+                      const partPaid = paidCount > 0 && !fullyPaid;
+                      const payColor = fullyPaid
+                        ? C.ok
+                        : partPaid
+                        ? C.gold
+                        : C.red;
+                      return (
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: payColor,
+                            fontWeight: fullyPaid ? 700 : 600,
+                            marginTop: 5,
+                          }}
+                        >
+                          {fullyPaid ? '✅' : '💰'} {payStr(w)}
+                          {fullyPaid
+                            ? ' · Pago'
+                            : partPaid
+                            ? ` · ${paidCount}/${instN} pago`
+                            : ' · Pendente'}
+                        </div>
+                      );
+                    })()}
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: postInfo(w.postStatus).color,
+                      fontWeight: 600,
+                      marginTop: 3,
+                    }}
+                  >
+                    {postInfo(w.postStatus).icon} {postInfo(w.postStatus).l}
+                  </div>
                 </div>
               );
             })}
@@ -2074,7 +2324,11 @@ export default function App() {
               templates={d.templates}
               albumSteps={d.albumSteps}
               title="Novo Trabalho"
-              onSave={(f: any, prev: string[]) => saveWork(f, prev, null)}
+              onSave={(
+                f: any,
+                mainSteps: string[],
+                albumStepsList: string[] | null
+              ) => saveWork(f, mainSteps, albumStepsList, null)}
               onCancel={() => setAddWork(false)}
             />
           </div>
@@ -2101,9 +2355,11 @@ export default function App() {
               templates={d.templates}
               albumSteps={d.albumSteps}
               title="✏️ Editar Trabalho"
-              onSave={(f: any, prev: string[]) =>
-                saveWork(f, prev, editWork.id)
-              }
+              onSave={(
+                f: any,
+                mainSteps: string[],
+                albumStepsList: string[] | null
+              ) => saveWork(f, mainSteps, albumStepsList, editWork.id)}
               onCancel={() => setEditWork(null)}
             />
           </div>
@@ -2563,6 +2819,51 @@ export default function App() {
                     })}
                   </>
                 )}
+
+                <SL t="POST" />
+                <div style={sc()}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 6,
+                      flexWrap: 'wrap',
+                      marginBottom: 8,
+                    }}
+                  >
+                    {POST_STATUS.map((ps) => {
+                      const active = (w.postStatus || 'nao_autorizado') === ps.v;
+                      return (
+                        <button
+                          key={ps.v}
+                          onClick={() => setPostStatus(w.id, ps.v)}
+                          style={{
+                            background: active ? ps.color : C.bg,
+                            border: `1.5px solid ${active ? ps.color : C.bor}`,
+                            borderRadius: 8,
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            color: active ? 'white' : C.txt,
+                            fontWeight: 700,
+                            fontSize: 12,
+                            flex: 1,
+                          }}
+                        >
+                          {ps.icon} {ps.l}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: postInfo(w.postStatus).color,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Status atual: {postInfo(w.postStatus).icon}{' '}
+                    {postInfo(w.postStatus).l}
+                  </div>
+                </div>
               </div>
             );
           })()}
