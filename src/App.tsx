@@ -193,12 +193,13 @@ const DEF_TMPLS = [
 ];
 
 const POST_STATUS = [
+  { v: 'consultar', l: 'Consultar', icon: '❓', color: '#8a6dc9' },
   { v: 'nao_autorizado', l: 'Não autorizado', icon: '🚫', color: '#c0392b' },
   { v: 'autorizado', l: 'Autorizado', icon: '⏳', color: '#c48a2a' },
   { v: 'postado', l: 'Postado', icon: '📸', color: '#5a9e6f' },
 ];
 const postInfo = (status: string) =>
-  POST_STATUS.find((p) => p.v === status) || POST_STATUS[0];
+  POST_STATUS.find((p) => p.v === status) || POST_STATUS[1];
 
 const DEF_H = [
   { id: 'h1', name: 'Oração', icon: '🙏' },
@@ -1672,6 +1673,9 @@ export default function App() {
     return my && my.m === vm.m && my.y === vm.y;
   });
   const listWorks = allWorks.filter((w: any) => belongsToMonthList(w, vm));
+  const monthWorksCount = monthWorks.filter(
+    (w: any) => (w.kind || 'trabalho') !== 'fotolivro'
+  ).length;
   const fatBruto = monthWorks.reduce(
     (s: number, w: any) => s + (w.valor || 0),
     0
@@ -1900,7 +1904,7 @@ export default function App() {
                 h={8}
               />
               <div style={{ fontSize: 11, color: C.mut, marginTop: 6 }}>
-                {monthWorks.length} trabalho(s) em {MES[vm.m]}
+                {monthWorksCount} trabalho(s) em {MES[vm.m]}
               </div>
               {bPct >= 100 && (
                 <div
@@ -2280,16 +2284,18 @@ export default function App() {
                         </div>
                       );
                     })()}
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: postInfo(w.postStatus).color,
-                      fontWeight: 600,
-                      marginTop: 3,
-                    }}
-                  >
-                    {postInfo(w.postStatus).icon} {postInfo(w.postStatus).l}
-                  </div>
+                  {(w.kind || 'trabalho') !== 'fotolivro' && (
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: postInfo(w.postStatus).color,
+                        fontWeight: 600,
+                        marginTop: 3,
+                      }}
+                    >
+                      {postInfo(w.postStatus).icon} {postInfo(w.postStatus).l}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -2814,50 +2820,57 @@ export default function App() {
                   </>
                 )}
 
-                <SL t="POST" />
-                <div style={sc()}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: 6,
-                      flexWrap: 'wrap',
-                      marginBottom: 8,
-                    }}
-                  >
-                    {POST_STATUS.map((ps) => {
-                      const active = (w.postStatus || 'nao_autorizado') === ps.v;
-                      return (
-                        <button
-                          key={ps.v}
-                          onClick={() => setPostStatus(w.id, ps.v)}
-                          style={{
-                            background: active ? ps.color : C.bg,
-                            border: `1.5px solid ${active ? ps.color : C.bor}`,
-                            borderRadius: 8,
-                            padding: '8px 12px',
-                            cursor: 'pointer',
-                            color: active ? 'white' : C.txt,
-                            fontWeight: 700,
-                            fontSize: 12,
-                            flex: 1,
-                          }}
-                        >
-                          {ps.icon} {ps.l}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: postInfo(w.postStatus).color,
-                      fontWeight: 600,
-                    }}
-                  >
-                    Status atual: {postInfo(w.postStatus).icon}{' '}
-                    {postInfo(w.postStatus).l}
-                  </div>
-                </div>
+                {(w.kind || 'trabalho') !== 'fotolivro' && (
+                  <>
+                    <SL t="POST" />
+                    <div style={sc()}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: 6,
+                          flexWrap: 'wrap',
+                          marginBottom: 8,
+                        }}
+                      >
+                        {POST_STATUS.map((ps) => {
+                          const active =
+                            (w.postStatus || 'nao_autorizado') === ps.v;
+                          return (
+                            <button
+                              key={ps.v}
+                              onClick={() => setPostStatus(w.id, ps.v)}
+                              style={{
+                                background: active ? ps.color : C.bg,
+                                border: `1.5px solid ${
+                                  active ? ps.color : C.bor
+                                }`,
+                                borderRadius: 8,
+                                padding: '8px 10px',
+                                cursor: 'pointer',
+                                color: active ? 'white' : C.txt,
+                                fontWeight: 700,
+                                fontSize: 11,
+                                flex: '1 1 45%',
+                              }}
+                            >
+                              {ps.icon} {ps.l}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: postInfo(w.postStatus).color,
+                          fontWeight: 600,
+                        }}
+                      >
+                        Status atual: {postInfo(w.postStatus).icon}{' '}
+                        {postInfo(w.postStatus).l}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             );
           })()}
@@ -2930,7 +2943,7 @@ export default function App() {
                 Meta: R$ {fmtR(d.metaLiquido)} · {lPct}%
               </div>
               <div style={{ fontSize: 11, color: C.mut, marginTop: 8 }}>
-                {monthWorks.length} trabalho(s) em {MES[vm.m]}
+                {monthWorksCount} trabalho(s) em {MES[vm.m]}
               </div>
               {bPct >= 100 && (
                 <div
